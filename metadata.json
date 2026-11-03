@@ -1,0 +1,7 @@
+{
+  "name": "AI Opportunity Discovery & Innovation Intelligence Platform",
+  "description": "A multi-agent, evidence-driven platform that discovers real-world problems, maps them to technologies and research, identifies research gaps, and produces explainable, scored, ranked problem–technology opportunities.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

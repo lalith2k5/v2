@@ -1,0 +1,724 @@
+import axios from 'axios';
+import { setupMockBackend } from './mockBackend';
+
+// Ensure mock backend is active for standalone React SPA execution
+setupMockBackend();
+
+const API_BASE = '/api';
+
+export const api = axios.create({
+  baseURL: API_BASE,
+  headers: { 'Content-Type': 'application/json' },
+  adapter: async (config) => {
+    const rawUrl = config.url || '';
+    const cleanUrl = rawUrl.startsWith('http') ? rawUrl : `${API_BASE}${rawUrl.startsWith('/') ? rawUrl : '/' + rawUrl}`;
+
+    let fullUrl = cleanUrl;
+    if (config.params && typeof config.params === 'object') {
+      const q = new URLSearchParams();
+      Object.entries(config.params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) q.append(k, String(v));
+      });
+      const qs = q.toString();
+      if (qs) fullUrl += (fullUrl.includes('?') ? '&' : '?') + qs;
+    }
+
+    const token = localStorage.getItem('aod_token');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(fullUrl, {
+      method: config.method?.toUpperCase() || 'GET',
+      headers,
+      body: config.data ? (typeof config.data === 'string' ? config.data : JSON.stringify(config.data)) : undefined,
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err: any = new Error(data.detail || `Request failed with status ${res.status}`);
+      err.response = { data, status: res.status, headers: {} };
+      throw err;
+    }
+
+    return {
+      data,
+      status: res.status,
+      statusText: res.statusText || 'OK',
+      headers: {},
+      config,
+    };
+  },
+});
+
+export interface Opportunity {
+  id: number;
+  title: string;
+  description: string;
+  opportunity_score: number;
+  confidence_score: number;
+  demand_score: number;
+  research_gap_score: number;
+  trend_score: number;
+  innovation_score: number;
+  competition_score: number;
+  feasibility_score: number;
+  market_readiness_score: number;
+  opportunity_score_spec?: number;
+  confidence_spec?: number;
+  weights_version?: string;
+  confidence_version?: string;
+  spec_status?: string;
+  explanation?: string;
+  // ---- Phase 6.1 enrichment (SRS §34 Opportunity Card) ----
+  domain?: string | null;
+  industry?: string | null;
+  related_technologies?: string[];
+  existing_research?: string[];
+  existing_approaches?: string | null;
+  known_limitations?: string | null;
+  suggested_research_direction?: string | null;
+  suggested_project_direction?: string | null;
+  emerging_trend?: string | null;
+  evidence_sources?: { source: string; url: string; title: string }[];
+  organization?: { name: string; industry_domain: string | null; source: string | null } | null;
+  problem_type?: string | null;
+  created_at?: string;
+}
+
+export interface LinkedPaper {
+  id: number;
+  title: string;
+  url: string;
+  arxiv_id: string | null;
+  relevance_score: number;
+  research_methods: string[];
+  results_summary: string | null;
+  research_areas: string[];
+  limitations: string[];
+}
+
+export interface ProblemProfileRich {
+  id: number;
+  organization: string | null;
+  problem_title: string;
+  problem_description: string | null;
+  industry_domain: string | null;
+  problem_type: string | null;
+  affected_stakeholders: string[];
+  evidence: string[];
+  confidence: number | null;
+  required_technology: string[];
+}
+
+export interface ProblemCluster {
+  id: number;
+  title: string;
+  description: string;
+  keywords: string[];
+  source_count: number;
+  demand_score: number;
+}
+
+export interface ResearchGap {
+  id: number;
+  title: string;
+  description: string;
+  gap_score: number;
+  gap_confidence?: number;
+  kind?: 'CAPABILITY' | 'COVERAGE';
+  gap_status?: 'PROPOSED' | 'UNDER_REVIEW' | 'VALIDATED' | 'REVISED' | 'REJECTED';
+  supporting_limitations?: string[];
+}
+
+export interface Trend {
+  id: number;
+  name: string;
+  category: string;
+  trend_score: number;
+  growth_rate?: number;
+  recent_avg?: number;
+  prior_avg?: number;
+  label?: 'growing' | 'declining' | 'stable' | 'new' | 'emerging' | 'no_data';
+  detected_at?: string;
+}
+
+export const getHealth = () => api.get('/health').then(r => r.data);
+export const getOpportunities = (
+  filters?: { domain?: string; industry?: string; technology?: string; problem_type?: string; offset?: number; limit?: number },
+) =>
+  api.get<Opportunity[]>('/opportunities', { params: filters }).then(r => r.data);
+
+export const getOpportunityFilters = () =>
+  api.get<{ domains: string[]; industries: string[]; technologies: string[]; problem_types: string[] }>(
+    '/opportunities/filters',
+  ).then(r => r.data);
+export const getProblems = () => api.get<ProblemCluster[]>('/problems').then(r => r.data);
+export const getResearchGaps = () => api.get<ResearchGap[]>('/research-gaps').then(r => r.data);
+export const getTrends = () => api.get<Trend[]>('/trends').then(r => r.data);
+export const getTrendHistory = (name: string, days: number = 30) =>
+  api.get(`/trends/${encodeURIComponent(name)}/history?days=${days}`).then(r => r.data);
+
+export const runPipeline = (query: string) =>
+  api.post('/pipeline/run', { query }).then(r => r.data);
+
+export const askAI = (
+  question: string,
+  context?: { kind?: string; id?: string; title?: string; summary?: string },
+) =>
+  api.post('/chat', {
+    question,
+    context_kind: context?.kind,
+    context_id: context?.id,
+    context_title: context?.title,
+    context_summary: context?.summary,
+  }).then(r => r.data);
+
+export const semanticSearch = (query: string) =>
+  api.post('/search', { query }).then(r => r.data);
+
+
+export const downloadPDFReport = async () => {
+  const token = localStorage.getItem('aod_token');
+  const response = await fetch('/api/reports/pdf', {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error('Failed to generate PDF');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `opportunity_report_${new Date().toISOString().slice(0, 10)}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+// Phase 7 flow endpoints
+export const getResearcherFlow = (topic?: string, limit = 20) =>
+  api.get('/researcher/flow', { params: { topic: topic || undefined, limit } }).then(r => r.data);
+export const getRDFlow = (industryProblem?: string, industry?: string, limit = 15) =>
+  api.get('/rd/flow', { params: { industry_problem: industryProblem || undefined, industry: industry || undefined, limit } }).then(r => r.data);
+export const getProblemProfileStats = () =>
+  api.get('/problem-profiles/stats').then(r => r.data);
+
+export const getSearchHistory = () =>
+  api.get('/search-history').then(r => r.data);
+
+export const getChatHistory = () =>
+  api.get('/chat-history').then(r => r.data);
+
+
+export const getOpportunityHistory = (id: number, days = 30) =>
+  api.get(`/opportunities/${id}/history`, { params: { days } }).then(r => r.data);
+
+export const getOpportunityDetail = (id: number) =>
+  api.get(`/opportunities/${id}`).then(r => r.data);
+
+export const getChatSession = (id: number) =>
+  api.get(`/chat-sessions/${id}`).then(r => r.data);
+
+export const getSchedulerStatus = () =>
+  api.get('/scheduler/status').then(r => r.data);
+
+
+// SRS 30: organizations + recent recommendations
+export interface Organization {
+  id: number;
+  name: string;
+  canonical_name: string;
+  industry_domain: string | null;
+  source: string | null;
+  profile_count: number;
+}
+export const getOrganizations = () =>
+  api.get<Organization[]>('/organizations').then(r => r.data);
+
+export interface RecommendationRow {
+  id: number;
+  opportunity_id: number;
+  opportunity: { id: number; title: string } | null;
+  suggested_research_direction: string | null;
+  suggested_project_direction: string | null;
+  score_at_time: number | null;
+  rank_at_time: number | null;
+  created_at: string | null;
+}
+export const getRecentRecommendations = (limit = 20) =>
+  api.get<{ count: number; recommendations: RecommendationRow[] }>('/recommendations/recent', { params: { limit } }).then(r => r.data);
+
+export const getOpportunityRecommendations = (oppId: number, limit = 20) =>
+  api.get<{ opportunity_id: number; count: number; recommendations: RecommendationRow[] }>(`/opportunities/${oppId}/recommendations`, { params: { limit } }).then(r => r.data);
+
+// Admin
+export const adminGetStats = () => api.get('/admin/stats').then(r => r.data);
+export const adminGetUsers = () => api.get('/admin/users').then(r => r.data);
+export const adminUpdateRole = (id: number, role: string) =>
+  api.patch(`/admin/users/${id}/role?role=${role}`).then(r => r.data);
+export const adminDeleteUser = (id: number) => api.delete(`/admin/users/${id}`).then(r => r.data);
+export const adminGetLogs = () => api.get('/admin/agent-logs').then(r => r.data);
+export const adminGetScheduler = () => api.get('/admin/scheduler').then(r => r.data);
+export const adminTriggerScheduler = () => api.post('/admin/scheduler/trigger').then(r => r.data);
+
+// Forgot password
+export const forgotPassword = (email: string) =>
+  api.post('/auth/forgot-password', { email }).then(r => r.data);
+export const resetPassword = (token: string, new_password: string) =>
+  api.post('/auth/reset-password', { token, new_password }).then(r => r.data);
+
+// Profile
+export const updateProfile = (data: { name?: string; email?: string }) =>
+  api.patch('/auth/me', data).then(r => r.data);
+export const changePassword = (old_password: string, new_password: string) =>
+  api.post('/auth/change-password', { old_password, new_password }).then(r => r.data);
+
+// Notifications
+export const getNotifications = () => api.get('/notifications').then(r => r.data);
+export const getUnreadCount = () => api.get('/notifications/unread-count').then(r => r.data);
+export const markNotificationRead = (id: number) => api.post(`/notifications/${id}/read`).then(r => r.data);
+export const markAllNotificationsRead = () => api.post('/notifications/read-all').then(r => r.data);
+
+// Knowledge Graph
+export const getKGStats = () => api.get('/kg/stats').then(r => r.data);
+export const getKGEntityTypes = () =>
+  api.get('/kg/entity-types').then(r => r.data);
+export const getKGNodes = (params: { entity_type?: string; limit?: number } = {}) =>
+  api.get('/kg/nodes', { params }).then(r => r.data);
+export const getKGEdgesList = (params: { relation?: string; limit?: number } = {}) =>
+  api.get('/kg/edges', { params }).then(r => r.data);
+export const getKGSemanticChain = (name: string, depth: number = 2) =>
+  api.get(`/kg/semantic-chain/${encodeURIComponent(name)}?depth=${depth}`).then(r => r.data);
+
+// Admin — Config & Sync
+export const adminGetSettings = () => api.get('/admin/settings').then(r => r.data);
+export const adminUpdateSetting = (key: string, value: string) =>
+  api.patch('/admin/settings', { key, value }).then(r => r.data);
+export const adminGetSyncStatus = () => api.get('/admin/sync/status').then(r => r.data);
+export const adminTriggerSync = (topic: string, mode: 'quick' | 'deep') =>
+  api.post('/admin/sync/trigger', { topic, mode }).then(r => r.data);
+
+// JSON exports
+const downloadFile = async (url: string, filename: string) => {
+  const token = localStorage.getItem('aod_token');
+  const response = await fetch(`/api${url}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error(`Export failed: ${response.status}`);
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(objectUrl);
+};
+
+export const downloadOpportunitiesJSON = () =>
+  downloadFile('/export/opportunities.json', `opportunities_${new Date().toISOString().slice(0,10)}.json`);
+export const downloadGapsJSON = () =>
+  downloadFile('/export/research-gaps.json', `research_gaps_${new Date().toISOString().slice(0,10)}.json`);
+export const downloadFullJSON = () =>
+  downloadFile('/export/full.json', `full_export_${new Date().toISOString().slice(0,10)}.json`);
+
+export const downloadContextualPdf = async (kind: string, id: string, title?: string) => {
+  const token = localStorage.getItem('aod_token');
+  const res = await fetch(`/api/reports/pdf/${kind}/${encodeURIComponent(id)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`PDF export failed (${res.status})`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const safe = (title || 'report').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60);
+  a.download = `${kind}_${safe}_${new Date().toISOString().slice(0,10)}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+
+export const adminGetLLMStatus = () => api.get('/admin/llm/status').then(r => r.data);
+
+// ---- SRS 32: pipeline status ----
+export interface PipelineStatus {
+  running: boolean;
+  started_at: string | null;
+  topic: string | null;
+  user_id: number | null;
+}
+export const adminGetPipelineStatus = () =>
+  api.get<PipelineStatus>('/admin/pipeline/status').then(r => r.data);
+
+// ---- SRS FR-01: data-source registry ----
+export interface DataSourceRow {
+  id: number;
+  name: string;
+  source_type: string;
+  is_active: boolean;
+  last_fetched: string | null;
+  document_count: number;
+}
+export const adminGetDataSources = () =>
+  api.get<DataSourceRow[]>('/admin/data-sources').then(r => r.data);
+export const adminToggleDataSource = (id: number, is_active: boolean) =>
+  api.patch(`/admin/data-sources/${id}`, { is_active }).then(r => r.data);
+
+// ---- Screen 3: technologies ----
+export interface RawDocRef {
+  id: number;
+  title: string;
+  url: string;
+  source: string;
+  collected_at: string | null;
+}
+
+export interface TechnologyListItem {
+  name: string;
+  domain: string | null;
+  stage: string | null;
+  confidence: number;
+  source_count: number;
+  related_problem_count: number;
+  related_paper_count: number;
+  trend_score: number;
+  trend_label: string | null;
+  recent_activity: string | null;
+  description: string;
+  composite_score: number;
+}
+
+export interface TechnologyTrendBlock {
+  name: string;
+  trend_score: number;
+  category: string | null;
+  detected_at: string | null;
+  growth_rate: number;
+  recent_avg: number;
+  prior_avg: number;
+  label: string;
+}
+
+export interface TechnologyDetailData {
+  technology: {
+    name: string;
+    stage: string | null;
+    confidence: number;
+    domain: string | null;
+    domains: string[];
+    source_count: number;
+    related_problem_count: number;
+    related_paper_count: number;
+    description: string;
+  };
+  related_problems: Array<{
+    id: number;
+    problem_title: string;
+    problem_description: string;
+    industry_domain: string | null;
+    problem_type: string | null;
+    organization: string | null;
+    source: string;
+    source_url: string;
+    stage: string;
+    created_at: string | null;
+  }>;
+  related_papers: Array<{
+    id: number;
+    title: string;
+    arxiv_id: string | null;
+    url: string;
+    relevance_score: number;
+    authors: string[];
+    abstract: string;
+    research_methods: string[];
+    results_summary: string | null;
+    limitations: string[];
+    research_areas: string[];
+  }>;
+  github_repositories: RawDocRef[];
+  news_articles: RawDocRef[];
+  reddit_discussions: RawDocRef[];
+  trend: TechnologyTrendBlock | null;
+  potential_gaps: Array<{ id: number; title: string; description: string; gap_score: number }>;
+  opportunities: Array<{
+    id: number;
+    title: string;
+    opportunity_score: number;
+    feasibility_score: number;
+    research_gap_score: number;
+    domain: string | null;
+    industry: string | null;
+  }>;
+  sources: Array<{ source: string; title: string; url: string }>;
+}
+
+export const getTechnologies = (
+  params?: { q?: string; domain?: string; stage?: string; limit?: number },
+) => api.get<TechnologyListItem[]>('/technologies', { params }).then(r => r.data);
+
+export const getTechnologyDetail = (name: string) =>
+  api.get<TechnologyDetailData>(`/technologies/${encodeURIComponent(name)}`).then(r => r.data);
+
+// ---- Screen 4: research papers ----
+export interface ResearchPaperListItem {
+  arxiv_id: string;
+  arxiv_id_raw: string | null;
+  title: string;
+  authors: string[];
+  year: number | null;
+  published: string | null;
+  domain: string | null;
+  keywords: string[];
+  abstract_snippet: string;
+  relevance_score: number;
+  url: string;
+  limitations_count: number;
+  methods: string[];
+}
+
+export interface ResearchRelatedPaper {
+  arxiv_id: string;
+  title: string;
+  year: number | null;
+  relevance_score: number;
+  url: string;
+}
+
+export interface ResearchPaperDetail {
+  paper: {
+    arxiv_id: string;
+    arxiv_id_raw: string | null;
+    title: string;
+    authors: string[];
+    published: string | null;
+    year: number | null;
+    url: string;
+    abstract: string;
+    relevance_score: number;
+    domain: string | null;
+  };
+  research_objective: string;
+  methodology: string[];
+  key_findings: string;
+  limitations: string[];
+  related_papers: ResearchRelatedPaper[];
+  related_technologies: string[];
+  potential_gaps: Array<{ id: number; title: string; description: string; gap_score: number }>;
+  source: { url: string; arxiv_id: string };
+}
+
+export const getResearchPapers = (
+  params?: { q?: string; domain?: string; year?: number; min_relevance?: number; limit?: number },
+) => api.get<ResearchPaperListItem[]>('/research-papers', { params }).then(r => r.data);
+
+export const getResearchPaperDetail = (arxivId: string) =>
+  api.get<ResearchPaperDetail>(`/research-papers/${encodeURIComponent(arxivId)}`).then(r => r.data);
+
+// ---- Screen 2: ideas ----
+export interface IdeaListItem {
+  id: number;
+  title: string;
+  description: string;
+  keywords: string[];
+  domain: string | null;
+  source_count: number;
+  demand_score: number;
+  trend_score: number;
+  trend_name: string | null;
+  opportunity_count: number;
+  top_opportunity_score: number;
+  recent_activity: string | null;
+  composite_score: number;
+}
+
+export interface IdeaSourceRef {
+  id: number;
+  title: string;
+  url: string;
+  source?: string;
+  collected_at?: string | null;
+}
+
+export interface IdeaDetailData {
+  idea: {
+    id: number;
+    title: string;
+    description: string;
+    keywords: string[];
+    source_count: number;
+    demand_score: number;
+    created_at: string | null;
+    domain: string | null;
+    problem_type: string | null;
+  };
+  related_technologies: Array<{ name: string; stage: string | null; confidence: number }>;
+  related_news: IdeaSourceRef[];
+  reddit_discussions: IdeaSourceRef[];
+  github_repositories: IdeaSourceRef[];
+  research_papers: Array<{
+    id: number;
+    title: string;
+    url?: string;
+    source?: string;
+    arxiv_id?: string | null;
+    relevance_score?: number;
+    authors?: string[];
+    results_summary?: string | null;
+    limitations?: string[];
+    research_methods?: string[];
+  }>;
+  evidence: Array<{ source: string; title: string; url: string; relevance_score: number }>;
+  potential_gaps: Array<{ id: number; title: string; description: string; gap_score: number }>;
+  opportunities: Array<{
+    id: number;
+    title: string;
+    opportunity_score: number;
+    feasibility_score: number;
+  }>;
+  suggested_directions: Array<{ kind: string; text: string }>;
+}
+
+export const getIdeas = (params?: { q?: string; domain?: string; limit?: number }) =>
+  api.get<IdeaListItem[]>('/ideas', { params }).then(r => r.data);
+
+export const getIdeaDetail = (id: number) =>
+  api.get<IdeaDetailData>(`/ideas/${id}`).then(r => r.data);
+
+// ---- Screen 5: R&D problem profiles ----
+export interface ProblemProfileListItem {
+  id: number;
+  organization: string | null;
+  problem_title: string;
+  problem_description: string | null;
+  industry_domain: string | null;
+  problem_type: string | null;
+  technology_stage: string;
+  required_technology: string[];
+  current_approach: string | null;
+  known_limitations: string | null;
+  expected_outcome: string | null;
+  source: string;
+  source_url: string;
+  keywords: string[];
+  problem_status: string;
+  student_suitability: string | null;
+  extracted_by: string;
+  affected_stakeholders: string[];
+  evidence: string[];
+  confidence: number | null;
+  created_at: string | null;
+}
+
+export interface ProblemProfilesPage {
+  total: number;
+  offset: number;
+  limit: number;
+  items: ProblemProfileListItem[];
+}
+
+export interface RDProblemDetail {
+  problem: ProblemProfileListItem & {
+    technology_stage: string;
+  };
+  organization: {
+    id: number | null;
+    name: string;
+    industry_domain: string | null;
+    source: string | null;
+  } | null;
+  related_technologies: Array<{ name: string; stage: string | null; confidence: number }>;
+  technology_landscape: {
+    count: number;
+    stages: string[];
+    average_confidence: number;
+  };
+  research_landscape: Array<{
+    id: number;
+    arxiv_id: string | null;
+    title: string;
+    year: number | null;
+    relevance_score: number;
+    url: string;
+    research_methods: string[];
+    results_summary: string | null;
+  }>;
+  emerging_trends: Array<{
+    name: string;
+    trend_score: number;
+    category: string | null;
+    detected_at: string | null;
+  }>;
+  evidence_aggregation: Record<string, Array<{
+    id: number;
+    title: string;
+    url: string;
+    source: string;
+    collected_at: string | null;
+  }>>;
+  evidence_sources: Array<{ source: string; title: string; url: string }>;
+  knowledge_graph: {
+    node: string;
+    nodes: Array<{ name: string; type: string; metadata: any }>;
+    edges: Array<{ source: string; target: string; relation: string }>;
+  };
+  potential_gaps: Array<{ id: number; title: string; description: string; gap_score: number }>;
+  innovation_opportunities: Array<{
+    id: number;
+    title: string;
+    opportunity_score: number;
+    feasibility_score: number;
+    research_gap_score: number;
+    domain: string | null;
+    industry: string | null;
+  }>;
+  opportunity_scoring: {
+    opportunity_id: number;
+    title: string;
+    opportunity_score: number;
+    demand: number;
+    research_gap: number;
+    trend: number;
+    feasibility: number;
+    market_readiness: number;
+    technology_suitability: number;
+    evidence_strength: number;
+    recency: number;
+    confidence: number;
+    explanation: string | null;
+  } | null;
+  recommended_next_steps: Array<{ kind: string; text: string }>;
+}
+
+export const getProblemProfiles = (params?: {
+  search?: string;
+  domain?: string;
+  source?: string;
+  student_suitability?: string;
+  limit?: number;
+  offset?: number;
+}) => api.get<ProblemProfilesPage>('/problem-profiles', { params }).then(r => r.data);
+
+export const getRDProblemDetail = (profileId: number) =>
+  api.get<RDProblemDetail>(`/rd/problems/${profileId}`).then(r => r.data);
+
+
+export interface ReviewQueueItem {
+  id: number;
+  title: string;
+  description: string;
+  gap_score: number;
+  gap_confidence: number;
+  kind: 'CAPABILITY' | 'COVERAGE' | string;
+  gap_status: string;
+  supporting_limitations: string[];
+  problem_cluster_id: number | null;
+  created_at: string | null;
+}
+
+export const getReviewQueue = (limit: number = 100) =>
+  api.get<{ count: number; items: ReviewQueueItem[] }>('/admin/review/queue', { params: { limit } }).then(r => r.data);
+
+export const decideGap = (gapId: number, decision: 'VALIDATED' | 'REVISED' | 'REJECTED', rationale: string) =>
+  api.post(`/admin/review/gaps/${gapId}/decide`, { decision, rationale }).then(r => r.data);
